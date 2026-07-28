@@ -219,6 +219,39 @@ function NewInvoiceForm() {
 
   const { toasts, addToast } = useToasts();
 
+  const handleSplitEqually = () => {
+    if (recipients.length <= 1) return;
+
+    setPreviousRecipientsForUndo([...recipients]);
+
+    const { perRecipient, remainder } = (() => {
+      const pp = Math.floor(100 / recipients.length);
+      const rem = 100 - (pp * recipients.length);
+      return { perRecipient: pp, remainder: rem };
+    })();
+
+    const newRecipients = recipients.map((r, index) => ({
+      ...r,
+      amount: (100 / recipients.length).toFixed(7),
+    }));
+
+    if (remainder > 0 && newRecipients.length > 0) {
+      const firstAmount = parseFloat(newRecipients[0].amount) + (remainder / recipients.length);
+      newRecipients[0].amount = firstAmount.toFixed(7);
+    }
+
+    setRecipients(newRecipients);
+    addToast("Split distributed equally", "success");
+  };
+
+  const handleUndoSplit = () => {
+    if (previousRecipientsForUndo) {
+      setRecipients(previousRecipientsForUndo);
+      setPreviousRecipientsForUndo(null);
+      addToast("Distribution undone", "success");
+    }
+  };
+
   const handleImported = (data: ImportedTxData) => {
     setImportedTx(data);
     setRetroError(null);
@@ -298,6 +331,7 @@ function NewInvoiceForm() {
   const [loading, setLoading] = useState(false);
   const [autofilled, setAutofilled] = useState(false);
   const [stepErrors, setStepErrors] = useState<Record<number, string | null>>({});
+  const [previousRecipientsForUndo, setPreviousRecipientsForUndo] = useState<RecipientRow[] | null>(null);
 
   useEffect(() => {
     if (fromId || sessionStorage.getItem("invoiceTemplate") || searchParams.get("address")) return;
@@ -694,28 +728,54 @@ function NewInvoiceForm() {
       <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Recipients</h2>
 
       {!cloneSourceId && (
-        <div className="flex items-center justify-between rounded-lg bg-gray-800 border border-gray-700 px-4 py-3">
-          <label htmlFor="equal-split-toggle" className="text-sm font-medium text-gray-300 cursor-pointer">
-            {t("invoiceNew.equalSplit")}
-          </label>
-          <button
-            id="equal-split-toggle"
-            type="button"
-            role="switch"
-            aria-checked={equalSplit}
-            aria-label="Toggle equal split mode"
-            onClick={() => setEqualSplit((v) => !v)}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-              equalSplit ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-600"
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                equalSplit ? "translate-x-6" : "translate-x-1"
+        <>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between rounded-lg bg-gray-800 border border-gray-700 px-4 py-3">
+            <label htmlFor="equal-split-toggle" className="text-sm font-medium text-gray-300 cursor-pointer">
+              {t("invoiceNew.equalSplit")}
+            </label>
+            <button
+              id="equal-split-toggle"
+              type="button"
+              role="switch"
+              aria-checked={equalSplit}
+              aria-label="Toggle equal split mode"
+              onClick={() => setEqualSplit((v) => !v)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                equalSplit ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-600"
               }`}
-            />
-          </button>
-        </div>
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  equalSplit ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          {!equalSplit && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleSplitEqually}
+                disabled={recipients.length <= 1}
+                aria-label="Distribute all amounts equally among recipients"
+                className="min-h-11 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-sm text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                Split equally
+              </button>
+              {previousRecipientsForUndo && (
+                <button
+                  type="button"
+                  onClick={handleUndoSplit}
+                  aria-label="Undo the equal split distribution"
+                  className="min-h-11 px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm text-gray-200 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  ↶ Undo
+                </button>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {equalSplit && !cloneSourceId && (
