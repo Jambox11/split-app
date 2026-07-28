@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import Stepper, { type Step } from "@/components/ui/Stepper";
+import FormField from "@/components/ui/FormField";
 import { splitClient } from "@/lib/stellar";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import { deadlineFromDays, parseAmount, formatAmount } from "@stellar-split/sdk";
@@ -252,6 +253,41 @@ function NewInvoiceForm() {
     }
   };
 
+  const markFieldTouched = (fieldName: string) => {
+    setTouchedFields((prev) => new Set([...prev, fieldName]));
+  };
+
+  const validateField = (fieldName: string, value: unknown): string | null => {
+    if (fieldName === 'token') {
+      const tokenValue = value as string;
+      if (!tokenValue || !tokenValue.startsWith('C')) {
+        return 'Valid token contract address (starting with C) is required';
+      }
+    } else if (fieldName === 'deadlineDays') {
+      const days = value as number;
+      if (days < 1 || days > 365) {
+        return 'Deadline must be between 1 and 365 days';
+      }
+    } else if (fieldName === 'cloneDeadline') {
+      const deadlineError = validateDeadline(value as string);
+      return deadlineError;
+    }
+    return null;
+  };
+
+  const handleFieldBlur = (fieldName: string, value: unknown) => {
+    markFieldTouched(fieldName);
+    const error = validateField(fieldName, value);
+    setFieldErrors((prev) => ({ ...prev, [fieldName]: error }));
+  };
+
+  const handleFieldChange = (fieldName: string, value: unknown) => {
+    if (touchedFields.has(fieldName)) {
+      const error = validateField(fieldName, value);
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: error }));
+    }
+  };
+
   const handleImported = (data: ImportedTxData) => {
     setImportedTx(data);
     setRetroError(null);
@@ -332,6 +368,8 @@ function NewInvoiceForm() {
   const [autofilled, setAutofilled] = useState(false);
   const [stepErrors, setStepErrors] = useState<Record<number, string | null>>({});
   const [previousRecipientsForUndo, setPreviousRecipientsForUndo] = useState<RecipientRow[] | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string | null>>({});
+  const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (fromId || sessionStorage.getItem("invoiceTemplate") || searchParams.get("address")) return;
@@ -606,78 +644,91 @@ function NewInvoiceForm() {
         />
       )}
 
-      <div>
-        <label htmlFor="token-address" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          {t("invoiceNew.tokenAddress")}
-        </label>
-        <ChangedField changed={tokenChanged}>
+      <ChangedField changed={tokenChanged}>
+        <FormField
+          id="token-address"
+          label={t("invoiceNew.tokenAddress")}
+          error={touchedFields.has('token') ? fieldErrors['token'] : null}
+          required
+        >
           <input
-            id="token-address"
             type="text"
             value={token}
-            onChange={(e) => setToken(e.target.value)}
-            required
+            onChange={(e) => {
+              setToken(e.target.value);
+              handleFieldChange('token', e.target.value);
+            }}
+            onBlur={(e) => handleFieldBlur('token', e.target.value)}
             placeholder="C..."
-            className="w-full min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+              touchedFields.has('token') && fieldErrors['token']
+                ? 'border-red-500'
+                : 'border-gray-700'
+            }`}
           />
-        </ChangedField>
-      </div>
+        </FormField>
+      </ChangedField>
 
       {cloneSourceId ? (
-        <div>
-          <label htmlFor="clone-deadline" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            {t("invoiceNew.deadline")}
-          </label>
+        <FormField
+          id="clone-deadline"
+          label={t("invoiceNew.deadline")}
+          error={touchedFields.has('cloneDeadline') ? fieldErrors['cloneDeadline'] : null}
+          required
+        >
           <input
-            id="clone-deadline"
             type="datetime-local"
             value={cloneDeadlineIso.slice(0, 16)}
             onChange={(e) => {
               setCloneDeadlineIso(e.target.value);
-              const err = validateDeadline(e.target.value);
-              setDeadlineError(err);
-              setStepErrors((prev) => ({ ...prev, [0]: err }));
+              handleFieldChange('cloneDeadline', e.target.value);
             }}
-            required
+            onBlur={(e) => handleFieldBlur('cloneDeadline', e.target.value)}
             className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-              deadlineError ? "border-red-500" : "border-gray-700"
+              touchedFields.has('cloneDeadline') && fieldErrors['cloneDeadline']
+                ? 'border-red-500'
+                : 'border-gray-700'
             }`}
-            aria-describedby={deadlineError ? "clone-deadline-error" : undefined}
-            aria-invalid={!!deadlineError}
           />
-          {deadlineError && (
-            <p id="clone-deadline-error" role="alert" className="text-red-600 dark:text-red-400 text-sm mt-1">
-              {deadlineError}
-            </p>
-          )}
-        </div>
+        </FormField>
       ) : (
-        <div>
-          <label htmlFor="deadline-days" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            {t("invoiceNew.deadline")}
-          </label>
+        <FormField
+          id="deadline-days"
+          label={t("invoiceNew.deadline")}
+          error={touchedFields.has('deadlineDays') ? fieldErrors['deadlineDays'] : null}
+          required
+        >
           <input
-            id="deadline-days"
             type="number"
             min={1}
             max={365}
             value={deadlineDays}
-            onChange={(e) => setDeadlineDays(Number(e.target.value))}
-            required
-            className="w-full min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            onChange={(e) => {
+              setDeadlineDays(Number(e.target.value));
+              handleFieldChange('deadlineDays', Number(e.target.value));
+            }}
+            onBlur={(e) => handleFieldBlur('deadlineDays', Number(e.target.value))}
+            className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+              touchedFields.has('deadlineDays') && fieldErrors['deadlineDays']
+                ? 'border-red-500'
+                : 'border-gray-700'
+            }`}
           />
-          <DeadlineSuggester
-            totalAmount={
-              equalSplit
-                ? totalAmount
-                : recipients
-                    .reduce((sum, r) => sum + parseFloat(r.amount || "0"), 0)
-                    .toString()
-            }
-            recipientCount={recipients.filter((r) => r.address).length}
-            onUseSuggestion={(days: number) => setDeadlineDays(days)}
-          />
-        </div>
+        </FormField>
+      )}
+
+      {!cloneSourceId && (
+        <DeadlineSuggester
+          totalAmount={
+            equalSplit
+              ? totalAmount
+              : recipients
+                  .reduce((sum, r) => sum + parseFloat(r.amount || "0"), 0)
+                  .toString()
+          }
+          recipientCount={recipients.filter((r) => r.address).length}
+          onUseSuggestion={(days: number) => setDeadlineDays(days)}
+        />
       )}
 
       {!cloneSourceId && (
@@ -779,27 +830,41 @@ function NewInvoiceForm() {
       )}
 
       {equalSplit && !cloneSourceId && (
-        <div>
-          <label htmlFor="total-amount" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            {t("invoiceNew.totalAmount")}
-          </label>
-          <input
+        <>
+          <FormField
             id="total-amount"
-            type="number"
-            placeholder="0.00"
-            step="0.0000001"
-            min="0.0000001"
-            value={totalAmount}
-            onChange={(e) => setTotalAmount(e.target.value)}
+            label={t("invoiceNew.totalAmount")}
+            error={touchedFields.has('totalAmount') ? fieldErrors['totalAmount'] : null}
             required
-            className="w-full min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+          >
+            <input
+              type="number"
+              placeholder="0.00"
+              step="0.0000001"
+              min="0.0000001"
+              value={totalAmount}
+              onChange={(e) => {
+                setTotalAmount(e.target.value);
+                if (touchedFields.has('totalAmount')) {
+                  handleFieldChange('totalAmount', e.target.value);
+                }
+              }}
+              onBlur={(e) => {
+                handleFieldBlur('totalAmount', e.target.value);
+              }}
+              className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                touchedFields.has('totalAmount') && fieldErrors['totalAmount']
+                  ? 'border-red-500'
+                  : 'border-gray-700'
+              }`}
+            />
+          </FormField>
           {perRecipientAmount && (
-            <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+            <p className="text-xs text-gray-600 dark:text-gray-400">
               {perRecipientAmount} {t("invoiceNew.perRecipient")}
             </p>
           )}
-        </div>
+        </>
       )}
 
       <div>
