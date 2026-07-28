@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import Stepper, { type Step } from "@/components/ui/Stepper";
 import FormField from "@/components/ui/FormField";
+import UnsavedChangesModal from "@/components/ui/UnsavedChangesModal";
 import { splitClient } from "@/lib/stellar";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import { deadlineFromDays, parseAmount, formatAmount } from "@stellar-split/sdk";
@@ -155,12 +156,29 @@ function NewInvoiceForm() {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [recoveredDraft, setRecoveredDraft] = useState<StoredDraft | null>(null);
 
+  const isDraftDirty = () => {
+    if (!hasUserInteracted) return false;
+    return recipients.length > 0 || deadlineDays !== 7 || token !== (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? "") || tags.length > 0;
+  };
+
   useEffect(() => {
     getFreighterPublicKey()
       .then((pk) => setDraftUserId(pk))
       .catch(() => setDraftUserId(getOrCreateLocalUserId()));
     setDraftId(crypto.randomUUID());
   }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDraftDirty()) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUserInteracted, recipients, deadlineDays, token, tags]);
 
   useEffect(() => {
     if (!draftUserId || fromId || searchParams.get("template") || searchParams.get("address")) return;
@@ -173,6 +191,20 @@ function NewInvoiceForm() {
     // draft won't exist yet so it can never be the one we find here).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftUserId]);
+
+  useEffect(() => {
+    if (hasUserInteracted) return;
+    const initialRecipients = [{ address: "", amount: "" }];
+    const initialToken = process.env.NEXT_PUBLIC_USDC_ADDRESS ?? "";
+    const initialDeadline = 7;
+
+    if (JSON.stringify(recipients) !== JSON.stringify(initialRecipients) ||
+        token !== initialToken ||
+        deadlineDays !== initialDeadline ||
+        tags.length > 0) {
+      setHasUserInteracted(true);
+    }
+  }, [recipients, token, deadlineDays, tags, hasUserInteracted]);
 
   const draftSnapshot = {
     recipients,
@@ -277,11 +309,13 @@ function NewInvoiceForm() {
 
   const handleFieldBlur = (fieldName: string, value: unknown) => {
     markFieldTouched(fieldName);
+    setHasUserInteracted(true);
     const error = validateField(fieldName, value);
     setFieldErrors((prev) => ({ ...prev, [fieldName]: error }));
   };
 
   const handleFieldChange = (fieldName: string, value: unknown) => {
+    setHasUserInteracted(true);
     if (touchedFields.has(fieldName)) {
       const error = validateField(fieldName, value);
       setFieldErrors((prev) => ({ ...prev, [fieldName]: error }));
@@ -370,6 +404,9 @@ function NewInvoiceForm() {
   const [previousRecipientsForUndo, setPreviousRecipientsForUndo] = useState<RecipientRow[] | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string | null>>({});
   const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [pendingNavigationHref, setPendingNavigationHref] = useState<string | null>(null);
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
 
   useEffect(() => {
     if (fromId || sessionStorage.getItem("invoiceTemplate") || searchParams.get("address")) return;
@@ -520,7 +557,18 @@ function NewInvoiceForm() {
   };
 
   const handleBack = () => {
-    goToStep(Math.max(step - 1, 0));
+    if (step > 0) {
+      goToStep(Math.max(step - 1, 0));
+    }
+  };
+
+  const handleProtectedNavigation = (href: string) => {
+    if (isDraftDirty()) {
+      setPendingNavigationHref(href);
+      setShowUnsavedModal(true);
+    } else {
+      router.push(href);
+    }
   };
 
   const payloadForApi = () => {
@@ -1040,6 +1088,14 @@ function NewInvoiceForm() {
       )}
 
       <div className="flex items-center gap-3 mb-8 flex-wrap">
+        <button
+          type="button"
+          onClick={() => handleProtectedNavigation('/')}
+          className="text-2xl hover:opacity-70 transition-opacity focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
+          aria-label="Back to home"
+        >
+          ←
+        </button>
         <h1 className="text-3xl font-bold">Create Invoice</h1>
         {draftOffline && (
           <span
@@ -1224,6 +1280,21 @@ function NewInvoiceForm() {
       </form>
       </>
       )}
+
+      <UnsavedChangesModal
+        isOpen={showUnsavedModal}
+        onDiscard={() => {
+          setShowUnsavedModal(false);
+          discardDraft();
+          if (pendingNavigationHref) {
+            router.push(pendingNavigationHref);
+          }
+        }}
+        onKeepEditing={() => {
+          setShowUnsavedModal(false);
+          setPendingNavigationHref(null);
+        }}
+      />
     </main>
   );
 }
