@@ -7,6 +7,8 @@ import dynamic from "next/dynamic";
 import Stepper, { type Step } from "@/components/ui/Stepper";
 import FormField from "@/components/ui/FormField";
 import UnsavedChangesModal from "@/components/ui/UnsavedChangesModal";
+import FeeTooltip from "@/components/ui/FeeTooltip";
+import { useNetworkFeeBreakdown } from "@/hooks/useNetworkFeeBreakdown";
 import { splitClient } from "@/lib/stellar";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import { deadlineFromDays, parseAmount, formatAmount } from "@stellar-split/sdk";
@@ -407,6 +409,7 @@ function NewInvoiceForm() {
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingNavigationHref, setPendingNavigationHref] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const { feeBreakdown, isLoading: feeLoading, error: feeError, refetch: refetchFees } = useNetworkFeeBreakdown();
 
   useEffect(() => {
     if (fromId || sessionStorage.getItem("invoiceTemplate") || searchParams.get("address")) return;
@@ -1033,9 +1036,16 @@ function NewInvoiceForm() {
           </div>
           <div className="px-4 py-3 flex justify-between">
             <span className="text-sm text-gray-400">Total</span>
-            <span className="text-sm text-gray-200 font-semibold">
-              {equalSplit ? totalAmount : total.toFixed(7)} USDC
-            </span>
+            <FeeTooltip
+              feeBreakdown={feeBreakdown}
+              isLoading={feeLoading}
+              error={feeError}
+              onRefresh={refetchFees}
+            >
+              <span className="text-sm text-gray-200 font-semibold cursor-help hover:text-indigo-300 transition-colors">
+                {equalSplit ? totalAmount : total.toFixed(7)} USDC
+              </span>
+            </FeeTooltip>
           </div>
         </div>
 
