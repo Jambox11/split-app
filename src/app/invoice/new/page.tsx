@@ -38,6 +38,13 @@ import {
   type SplitMeta,
 } from "@/hooks/useSplitCalculator";
 import InstallmentPlanBuilder from "@/components/invoice/InstallmentPlanBuilder";
+import AmountDenominationInput from "@/components/AmountDenominationInput";
+import { useXlmUsdcRate } from "@/hooks/useXlmUsdcRate";
+
+import { useInvoiceCollaboration } from "@/hooks/useInvoiceCollaboration";
+import CursorOverlay from "@/components/CursorOverlay";
+import PresencePill from "@/components/PresencePill";
+import ReconnectionBanner from "@/components/ReconnectionBanner";
 
 const RecipientForm = dynamic(() => import("@/components/RecipientForm"), { ssr: false });
 const TemplateManager = dynamic(() => import("@/components/TemplateManager"), { ssr: false });
@@ -396,6 +403,7 @@ function NewInvoiceForm() {
     }
   }, [searchParams, addToast]);
 
+  const [publicKey, setPublicKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [txModal, setTxModal] = useState<{ txHash: string; invoiceId: string } | null>(null);
   const [equalSplit, setEqualSplit] = useState(false);
@@ -410,6 +418,26 @@ function NewInvoiceForm() {
   const [pendingNavigationHref, setPendingNavigationHref] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const { feeBreakdown, isLoading: feeLoading, error: feeError, refetch: refetchFees } = useNetworkFeeBreakdown();
+
+  // Denomination toggle state (XLM / USDC)
+  type Denomination = "XLM" | "USDC";
+  const [amountDenom, setAmountDenom] = useState<Denomination>("USDC");
+  const xlmUsdcRate = useXlmUsdcRate();
+
+  /** Convert an amount string from current denomination to USDC for on-chain use */
+  const toUsdc = useCallback(
+    (amount: string): string => {
+      if (amountDenom === "USDC" || !xlmUsdcRate) return amount;
+      const n = parseFloat(amount);
+      if (isNaN(n)) return amount;
+      return (n * xlmUsdcRate).toFixed(7).replace(/\.?0+$/, "");
+    },
+    [amountDenom, xlmUsdcRate],
+  );
+
+  useEffect(() => {
+    getFreighterPublicKey().then(setPublicKey).catch(() => null);
+  }, []);
 
   useEffect(() => {
     if (fromId || sessionStorage.getItem("invoiceTemplate") || searchParams.get("address")) return;
@@ -607,7 +635,7 @@ function NewInvoiceForm() {
           sourceInvoiceId: cloneSourceId,
           recipients: recipients.map((r) => ({
             address: r.address,
-            amount: parseAmount(r.amount),
+            amount: parseAmount(toUsdc(r.amount)),
           })),
           token,
           deadline: deadlineTs,
@@ -634,7 +662,7 @@ function NewInvoiceForm() {
           creator,
           recipients: recipients.map((r) => ({
             address: r.address,
-            amount: parseAmount(equalSplit ? (perRecipientAmount ?? "0") : r.amount),
+            amount: parseAmount(equalSplit ? toUsdc(perRecipientAmount ?? "0") : toUsdc(r.amount)),
           })),
           token,
           deadline: deadlineFromDays(deadlineDays),
@@ -705,11 +733,12 @@ function NewInvoiceForm() {
           <input
             type="text"
             value={token}
-            onChange={(e) => {
-              setToken(e.target.value);
-              handleFieldChange('token', e.target.value);
+            onChange={(e) => setToken(e.target.value)}
+            onFocus={() => setFocusedField("token-address")}
+            onBlur={() => {
+              if (focusedField === "token-address") emitFieldBlur();
             }}
-            onBlur={(e) => handleFieldBlur('token', e.target.value)}
+            required
             placeholder="C..."
             className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
               touchedFields.has('token') && fieldErrors['token']
@@ -717,8 +746,9 @@ function NewInvoiceForm() {
                 : 'border-gray-700'
             }`}
           />
-        </FormField>
-      </ChangedField>
+          <CursorOverlay cursors={remoteCursors} fieldName="token-address" />
+        </ChangedField>
+      </div>
 
       {cloneSourceId ? (
         <FormField
@@ -754,16 +784,25 @@ function NewInvoiceForm() {
             min={1}
             max={365}
             value={deadlineDays}
-            onChange={(e) => {
-              setDeadlineDays(Number(e.target.value));
-              handleFieldChange('deadlineDays', Number(e.target.value));
+            onChange={(e) => setDeadlineDays(Number(e.target.value))}
+            onFocus={() => setFocusedField("deadline-days")}
+            onBlur={() => {
+              if (focusedField === "deadline-days") emitFieldBlur();
             }}
-            onBlur={(e) => handleFieldBlur('deadlineDays', Number(e.target.value))}
-            className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-              touchedFields.has('deadlineDays') && fieldErrors['deadlineDays']
-                ? 'border-red-500'
-                : 'border-gray-700'
-            }`}
+            required
+            className="w-full min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          <CursorOverlay cursors={remoteCursors} fieldName="deadline-days" />
+          <DeadlineSuggester
+            totalAmount={
+              equalSplit
+                ? totalAmount
+                : recipients
+                    .reduce((sum, r) => sum + parseFloat(r.amount || "0"), 0)
+                    .toString()
+            }
+            recipientCount={recipients.filter((r) => r.address).length}
+            onUseSuggestion={(days: number) => setDeadlineDays(days)}
           />
         </FormField>
       )}
@@ -884,32 +923,20 @@ function NewInvoiceForm() {
         <>
           <FormField
             id="total-amount"
-            label={t("invoiceNew.totalAmount")}
-            error={touchedFields.has('totalAmount') ? fieldErrors['totalAmount'] : null}
+            type="number"
+            placeholder="0.00"
+            step="0.0000001"
+            min="0.0000001"
+            value={totalAmount}
+            onChange={(e) => setTotalAmount(e.target.value)}
+            onFocus={() => setFocusedField("total-amount")}
+            onBlur={() => {
+              if (focusedField === "total-amount") emitFieldBlur();
+            }}
             required
-          >
-            <input
-              type="number"
-              placeholder="0.00"
-              step="0.0000001"
-              min="0.0000001"
-              value={totalAmount}
-              onChange={(e) => {
-                setTotalAmount(e.target.value);
-                if (touchedFields.has('totalAmount')) {
-                  handleFieldChange('totalAmount', e.target.value);
-                }
-              }}
-              onBlur={(e) => {
-                handleFieldBlur('totalAmount', e.target.value);
-              }}
-              className={`w-full min-h-11 bg-gray-800 border rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                touchedFields.has('totalAmount') && fieldErrors['totalAmount']
-                  ? 'border-red-500'
-                  : 'border-gray-700'
-              }`}
-            />
-          </FormField>
+            className="w-full min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          <CursorOverlay cursors={remoteCursors} fieldName="total-amount" />
           {perRecipientAmount && (
             <p className="text-xs text-gray-600 dark:text-gray-400">
               {perRecipientAmount} {t("invoiceNew.perRecipient")}
@@ -919,9 +946,36 @@ function NewInvoiceForm() {
       )}
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          {equalSplit ? t("invoiceNew.recipients") : t("invoiceNew.recipientsAndAmounts")}
-        </label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            {equalSplit ? t("invoiceNew.recipients") : t("invoiceNew.recipientsAndAmounts")}
+          </label>
+          {!equalSplit && !cloneSourceId && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-gray-500">Amounts in:</span>
+              <button
+                type="button"
+                onClick={() => setAmountDenom((d) => d === "XLM" ? "USDC" : "XLM")}
+                aria-label={`Switch amount denomination to ${amountDenom === "XLM" ? "USDC" : "XLM"}`}
+                title={xlmUsdcRate ? `1 XLM ≈ ${xlmUsdcRate.toFixed(4)} USDC` : "Rate unavailable"}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors ${
+                  amountDenom === "XLM"
+                    ? "bg-yellow-500/15 border-yellow-500/40 text-yellow-300 hover:bg-yellow-500/25"
+                    : "bg-blue-500/15 border-blue-500/40 text-blue-300 hover:bg-blue-500/25"
+                }`}
+              >
+                <span aria-hidden="true">{amountDenom === "XLM" ? "✦" : "$"}</span>
+                {amountDenom}
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4" />
+                </svg>
+              </button>
+              {xlmUsdcRate && (
+                <span className="text-xs text-gray-500">1 XLM ≈ {xlmUsdcRate.toFixed(4)} USDC</span>
+              )}
+            </div>
+          )}
+        </div>
         <ChangedField changed={recipientsChanged}>
           <RecipientForm
             recipients={recipients}
@@ -1070,6 +1124,14 @@ function NewInvoiceForm() {
 
   return (
     <main className="max-w-xl mx-auto w-full px-4 sm:px-6 py-16 overflow-x-hidden">
+      {/* Collaboration presence */}
+      {publicKey && <PresencePill presences={remotePresence} currentAddress={publicKey} />}
+
+      <ReconnectionBanner
+        show={!collabConnected && !!publicKey}
+        isConnected={collabConnected}
+      />
+
       <div
         aria-live="polite"
         className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"
